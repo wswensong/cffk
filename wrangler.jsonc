@@ -3,6 +3,9 @@
   "name": "cffk",
   "compatibility_date": "2026-03-12",
   "main": "vike:server-entry",
+  "vars": {
+    "ADMIN_PATH": "admin-ef9bf1d33408"
+  },
   "send_email": [
     {
       "name": "EMAIL"
