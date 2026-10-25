@@ -50,28 +50,6 @@
           </CardFooter>
         </form>
       </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>恢复后台登录</CardTitle>
-          <CardDescription>仅当前已登录的 root 管理员可用。设置新密码后，所有设备都会退出登录。</CardDescription>
-        </CardHeader>
-        <form class="flex flex-col gap-4" @submit.prevent="resetRootPassword">
-          <CardContent class="grid gap-5">
-            <div class="grid gap-2">
-              <Label for="recovery-password"><span class="text-destructive">*</span> 新密码</Label>
-              <Input id="recovery-password" v-model="recoveryPassword.next" type="password" autocomplete="new-password" minlength="8" placeholder="至少 8 位字符" required />
-            </div>
-            <div class="grid gap-2">
-              <Label for="recovery-password-confirm"><span class="text-destructive">*</span> 确认新密码</Label>
-              <Input id="recovery-password-confirm" v-model="recoveryPassword.confirm" type="password" autocomplete="new-password" minlength="8" required />
-            </div>
-          </CardContent>
-          <CardFooter class="justify-end">
-            <Button type="submit" variant="destructive" :disabled="resettingPassword">{{ resettingPassword ? "重置中..." : "设置新后台密码" }}</Button>
-          </CardFooter>
-        </form>
-      </Card>
     </div>
   </section>
 </template>
@@ -83,8 +61,6 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { authClient } from "@/lib/auth-client";
-import { runTelefunc } from "@/lib/telefunc-client";
-import { onResetCurrentRootPassword } from "@/server/user/admin.telefunc";
 import { toast } from "vue-sonner";
 import { reactive, ref, watch } from "vue";
 import { usePageContext } from "vike-vue/usePageContext";
@@ -92,10 +68,8 @@ import { usePageContext } from "vike-vue/usePageContext";
 const pageContext = usePageContext();
 const profile = reactive({ name: "", email: "" });
 const password = reactive({ current: "", next: "", confirm: "" });
-const recoveryPassword = reactive({ next: "", confirm: "" });
 const savingProfile = ref(false);
 const savingPassword = ref(false);
-const resettingPassword = ref(false);
 
 watch(
   () => pageContext.user,
@@ -163,26 +137,6 @@ async function changePassword() {
     toast.error("接口异常，请稍后重试。");
   } finally {
     savingPassword.value = false;
-  }
-}
-
-async function resetRootPassword() {
-  if (recoveryPassword.next !== recoveryPassword.confirm) {
-    toast.error("两次输入的新密码不一致。");
-    return;
-  }
-
-  resettingPassword.value = true;
-  try {
-    await runTelefunc(() => onResetCurrentRootPassword({ password: recoveryPassword.next }), { notifyError: false });
-    recoveryPassword.next = "";
-    recoveryPassword.confirm = "";
-    toast.success("新密码已设置。请使用新密码重新登录。");
-    window.setTimeout(() => window.location.assign(`/${pageContext.routeParams.adminPath}`), 800);
-  } catch {
-    toast.error("密码重置失败，请确认新密码至少 8 位后重试。");
-  } finally {
-    resettingPassword.value = false;
   }
 }
 </script>

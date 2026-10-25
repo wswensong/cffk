@@ -114,22 +114,6 @@ async function internalOnUpdateAdminUser(input: { userId?: unknown; name?: unkno
   }
 }
 
-async function internalOnResetCurrentRootPassword(input: { password?: unknown }) {
-  const { db, runtime, adminUserId } = requireAdmin();
-  const password = text(input?.password, "ADMIN_USER_PASSWORD_INVALID", 128);
-  if (password.length < 8) appError("ADMIN_USER_PASSWORD_INVALID");
-
-  const authRuntime = { runtime: "workerd", env: runtime } as unknown as RuntimeAdapter;
-  try {
-    const auth = createServerAuth(authRuntime);
-    const context = await auth.$context;
-    await context.internalAdapter.updatePassword(adminUserId, await context.password.hash(password));
-    await db.delete(session).where(eq(session.userId, adminUserId));
-  } catch {
-    appError("ADMIN_USER_UPDATE_FAILED");
-  }
-}
-
 async function internalOnSetAdminUserDisabled(input: { userId?: unknown; disabled?: unknown }) {
   const { db, adminUserId } = requireAdmin();
   const userId = text(input?.userId, "ADMIN_USER_NOT_FOUND", 255);
@@ -158,4 +142,3 @@ export const onGetAdminUsers = telefuncAction(internalOnGetAdminUsers);
 export const onCreateAdminUser = telefuncAction(internalOnCreateAdminUser);
 export const onUpdateAdminUser = telefuncAction(internalOnUpdateAdminUser);
 export const onSetAdminUserDisabled = telefuncAction(internalOnSetAdminUserDisabled);
-export const onResetCurrentRootPassword = telefuncAction(internalOnResetCurrentRootPassword);
