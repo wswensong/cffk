@@ -2,8 +2,10 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "cffk",
   "compatibility_date": "2026-03-12",
-  "keep_vars": true,
   "main": "vike:server-entry",
+  "vars": {
+    "ADMIN_PATH": "admin-ef9bf1d33408"
+  },
   "send_email": [
     {
       "name": "EMAIL"
@@ -14,7 +16,7 @@
       "binding": "DB",
       "database_name": "cffk_db",
       "migrations_dir": "database/migrations",
-      // "database_id": "6ccaa772-9379-494a-8548-7a1bb74e30da" // 一键部署必须注释/
+      "database_id": "b1c94583-49b5-4871-97ec-02c54abbfc10"
     }
   ],
   "compatibility_flags": [
