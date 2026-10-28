@@ -401,9 +401,10 @@ test("Dujiao Next signs JSON and maps processing and delivered results", async (
       throw new Error(`unexpected path: ${path}`);
     },
   });
-  await expect(adapter.submitOrder({ skuId: "7", quantity: 2, requestNo: "req-1", callbackUrl: "https://cffk.example/callback", traceId: "trace-1" })).resolves.toEqual({ status: "processing", upstreamOrderId: "88" });
+  await expect(adapter.submitOrder({ skuId: "7", quantity: 2, requestNo: "req-1", callbackUrl: "https://cffk.example/callback", traceId: "trace-1", customerEmail: "buyer@example.com" })).resolves.toEqual({ status: "processing", upstreamOrderId: "88" });
   await expect(adapter.reconcileOrder({ upstreamOrderId: "88" })).resolves.toEqual({ status: "supplied", upstreamOrderId: "88", cards: ["card-a", "card-b"] });
   const body = await calls[0].clone().text();
+  expect(JSON.parse(body)).toMatchObject({ sku_id: 7, quantity: 2, downstream_order_no: "req-1", email: "buyer@example.com" });
   expect(calls[0].headers.get("Dujiao-Next-Api-Key")).toBe("api-key");
   expect(calls[0].headers.get("Dujiao-Next-Signature")).toBe(signDujiaoNextRequest({ method: "POST", path: "/api/v1/upstream/orders", timestamp: "1700000000", rawBody: body, apiSecret: "api-secret" }));
 });

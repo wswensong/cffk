@@ -124,6 +124,7 @@ export class DujiaoNextAdapter implements SupplierAdapter {
 		requestNo: string;
 		callbackUrl: string;
 		traceId: string;
+		customerEmail?: string | null;
 	}): Promise<SupplierPurchaseResult> {
 		const body = await this.request("POST", "/api/v1/upstream/orders", {
 			sku_id: Number(input.skuId),
@@ -131,6 +132,7 @@ export class DujiaoNextAdapter implements SupplierAdapter {
 			downstream_order_no: input.requestNo,
 			trace_id: input.traceId,
 			callback_url: input.callbackUrl,
+			...(input.customerEmail ? { email: input.customerEmail } : {}),
 		});
 		const parsed = z
 			.object({

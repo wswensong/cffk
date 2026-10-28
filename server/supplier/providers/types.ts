@@ -63,6 +63,7 @@ export interface SupplierAdapter {
 		requestNo: string;
 		callbackUrl: string;
 		traceId: string;
+		customerEmail?: string | null;
 		purchaseContext?: SupplierPurchaseContext;
 	}): Promise<SupplierPurchaseResult>;
 	reconcileOrder(input: {
