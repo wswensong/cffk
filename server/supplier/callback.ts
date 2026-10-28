@@ -7,7 +7,6 @@ import { signDujiaoNextRequest } from "./providers/signatures";
 
 const MAX_CALLBACK_BYTES = 1024 * 1024;
 const MAX_TIMESTAMP_SKEW_SECONDS = 60;
-const CALLBACK_SIGNING_PATH = "/api/v1/upstream/callback";
 const callbackSchema = z.object({
   event: z.string().min(1).max(120).optional(),
   order_id: z.number().int().positive(),
@@ -33,7 +32,10 @@ export async function handleDujiaoSupplierCallback(database: D1Database, account
   let credentials: { apiKey?: string; apiSecret?: string };
   try { credentials = JSON.parse(account.credentialsJson) as { apiKey?: string; apiSecret?: string }; } catch { return response(false, "authentication_failed"); }
   if (credentials.apiKey !== apiKey || !credentials.apiSecret) return response(false, "authentication_failed");
-  const expected = signDujiaoNextRequest({ method: "POST", path: CALLBACK_SIGNING_PATH, timestamp: timestampHeader, rawBody, apiSecret: credentials.apiSecret });
+  const callbackPath = new URL(request.url).pathname;
+  const expectedPath = `/api/suppliers/dujiao-next/callback/${encodeURIComponent(accountId)}`;
+  if (callbackPath !== expectedPath) return response(false, "authentication_failed", 401);
+  const expected = signDujiaoNextRequest({ method: "POST", path: callbackPath, timestamp: timestampHeader, rawBody, apiSecret: credentials.apiSecret });
   if (!constantTimeEqual(signature.toLowerCase(), expected.toLowerCase())) return response(false, "authentication_failed");
   let payload: z.infer<typeof callbackSchema>;
   try { payload = callbackSchema.parse(JSON.parse(rawBody)); } catch { return response(false, "invalid_payload"); }

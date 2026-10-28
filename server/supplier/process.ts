@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { createDrizzleDb } from "@/database/drizzle";
 import { order, siteSetting, supplierAccount, supplierBinding, supplierOrder } from "@/database/drizzle/schema";
 import { createSupplierAdapter } from "./providers/factory";
@@ -64,7 +64,7 @@ async function reserveSupplierFunds(database: D1Database, taskId: number, accoun
   const now = Date.now();
   const reserved = await database.prepare("UPDATE supplierAccount SET reserveBalanceMinor = CAST(CAST(reserveBalanceMinor AS INTEGER) + CAST(? AS INTEGER) AS TEXT), updatedAt = ? WHERE id = ? AND enabled = 1 AND balanceMinor IS NOT NULL AND CAST(balanceMinor AS INTEGER) >= CAST(reserveBalanceMinor AS INTEGER) + CAST(? AS INTEGER)").bind(amountNumber, now, accountId, amountNumber).run();
   if (Number(reserved.meta.changes) !== 1) throw new Error("supplier_balance_insufficient");
-  const claimed = await database.prepare("UPDATE supplierOrder SET accountLockedAt = ?, updatedAt = ? WHERE id = ? AND selectedAccountId = ? AND accountLockedAt IS NULL AND state IN ('pending', 'failed') AND upstreamOrderId IS NULL").bind(now, now, taskId, accountId).run();
+  const claimed = await database.prepare("UPDATE supplierOrder SET accountLockedAt = ?, updatedAt = ? WHERE id = ? AND selectedAccountId = ? AND accountLockedAt IS NULL AND state = 'selecting' AND upstreamOrderId IS NULL").bind(now, now, taskId, accountId).run();
   if (Number(claimed.meta.changes) !== 1) {
     await releaseSupplierFunds(database, accountId, totalCostMinor);
     throw new Error("supplier_order_claim_conflict");
@@ -95,8 +95,8 @@ async function fulfillSupplierOrder(database: D1Database, task: typeof supplierO
   await database.batch([
     database.prepare("INSERT INTO orderDelivery (orderId, deliveryType, attemptToken, contentSnapshot, errorCode, status, createdAt) SELECT id, 'SUPPLIER', ?, ?, NULL, 'SUCCESS', ? FROM `order` WHERE id = ? AND fulfillmentSourceSnapshot = 'SUPPLIER' AND NOT EXISTS (SELECT 1 FROM orderDelivery WHERE attemptToken = ?)").bind(`supplier:${task.id}`, content, now, task.orderId, `supplier:${task.id}`),
     database.prepare("UPDATE `order` SET status = 'DELIVERED', deliveryStatus = 'DELIVERED', deliveredAt = ?, updatedAt = ? WHERE id = ? AND paymentStatus = 'PAID' AND fulfillmentSourceSnapshot = 'SUPPLIER' AND deliveryStatus != 'DELIVERED'").bind(now, now, task.orderId),
-    database.prepare("UPDATE supplierOrder SET deliveryRecordId = (SELECT id FROM orderDelivery WHERE attemptToken = ?), state = 'supplied', suppliedAt = ?, lastErrorCode = NULL, lastErrorMessage = NULL, updatedAt = ? WHERE id = ? AND state IN ('submitting', 'processing', 'uncertain')").bind(`supplier:${task.id}`, now, now, task.id),
-    database.prepare("UPDATE supplierAccount SET reserveBalanceMinor = CAST(MAX(0, CAST(reserveBalanceMinor AS INTEGER) - CAST(COALESCE((SELECT totalCostMinor FROM supplierOrder WHERE id = ?), '0') AS INTEGER)) AS TEXT), updatedAt = ? WHERE id = ?").bind(task.id, now, task.selectedAccountId),
+    database.prepare("UPDATE supplierAccount SET reserveBalanceMinor = CAST(MAX(0, CAST(reserveBalanceMinor AS INTEGER) - CAST(COALESCE((SELECT totalCostMinor FROM supplierOrder WHERE id = ?), '0') AS INTEGER)) AS TEXT), updatedAt = ? WHERE id = ? AND EXISTS (SELECT 1 FROM supplierOrder WHERE id = ? AND accountLockedAt IS NOT NULL AND state IN ('submitting', 'processing', 'uncertain'))").bind(task.id, now, task.selectedAccountId, task.id),
+    database.prepare("UPDATE supplierOrder SET deliveryRecordId = (SELECT id FROM orderDelivery WHERE attemptToken = ?), state = 'supplied', accountLockedAt = NULL, suppliedAt = ?, lastErrorCode = NULL, lastErrorMessage = NULL, updatedAt = ? WHERE id = ? AND state IN ('submitting', 'processing', 'uncertain')").bind(`supplier:${task.id}`, now, now, task.id),
   ]);
   await enqueueOrderEvent(database, { eventKey: `delivery-success:supplier:${task.id}`, orderId: task.orderId, scene: "DELIVERY_SUCCESS" });
 }
@@ -110,10 +110,16 @@ export async function processSupplierOrder(database: D1Database, supplierOrderId
   if (supplierOrderStateSchema.safeParse(task.state).success && ["supplied", "refunded"].includes(task.state)) return { status: task.state as "supplied" | "refunded" };
   if (task.state === "uncertain" && !task.upstreamOrderId) return { status: "uncertain" as const, errorCode: task.lastErrorCode ?? "supplier_request_uncertain" };
   if (task.attemptCount >= MAX_AUTOMATIC_ATTEMPTS && ["pending", "failed"].includes(task.state)) return failTask(db, task.id, "supplier_retry_exhausted", true);
+  const originalState = task.state;
+  if (!task.upstreamOrderId && ["pending", "failed"].includes(task.state)) {
+    const claimed = await database.prepare("UPDATE supplierOrder SET state = 'selecting', updatedAt = ? WHERE id = ? AND state = ? AND upstreamOrderId IS NULL").bind(Date.now(), task.id, task.state).run();
+    if (Number(claimed.meta.changes) !== 1) return { status: "processing" as const };
+    task = { ...task, state: "selecting" };
+  }
   // A worker interruption can leave a failed, never-submitted task holding funds. Release
   // that stale reservation before retrying; uncertain/submitting tasks are intentionally
   // excluded because an upstream order may already exist.
-  if (task.state === "failed" && !task.upstreamOrderId && task.accountLockedAt && task.selectedAccountId && task.totalCostMinor) {
+  if (originalState === "failed" && !task.upstreamOrderId && task.accountLockedAt && task.selectedAccountId && task.totalCostMinor) {
     await releaseSupplierFunds(database, task.selectedAccountId, task.totalCostMinor);
     await db.update(supplierOrder).set({ accountLockedAt: null, updatedAt: new Date() }).where(and(eq(supplierOrder.id, task.id), isNull(supplierOrder.upstreamOrderId)));
     task = { ...task, accountLockedAt: null };
@@ -179,7 +185,7 @@ export async function processSupplierOrder(database: D1Database, supplierOrderId
     }
   }
   if (!task.upstreamOrderId) {
-    await db.update(supplierOrder).set({ selectedAccountId: account.id, selectedCredentialsRevision: account.credentialsRevision, providerRequestNo: requestNo, quotedUnitCostMinor: quoteResult.unitCostMinor, totalCostMinor: quoteResult.totalCostMinor, state: "pending", selectionCount: task.selectionCount + (task.selectedAccountId === account.id ? 0 : 1), updatedAt: new Date() }).where(eq(supplierOrder.id, task.id));
+    await db.update(supplierOrder).set({ selectedAccountId: account.id, selectedCredentialsRevision: account.credentialsRevision, providerRequestNo: requestNo, quotedUnitCostMinor: quoteResult.unitCostMinor, totalCostMinor: quoteResult.totalCostMinor, selectionCount: task.selectionCount + (task.selectedAccountId === account.id ? 0 : 1), updatedAt: new Date() }).where(eq(supplierOrder.id, task.id));
     try {
       await reserveSupplierFunds(database, task.id, account.id, quoteResult.totalCostMinor);
     } catch (cause) {
@@ -198,12 +204,17 @@ export async function processSupplierOrder(database: D1Database, supplierOrderId
       await markAccountSuccess(db, account.id);
       await db.update(supplierOrder).set({ upstreamOrderId: result.upstreamOrderId, updatedAt: new Date() }).where(eq(supplierOrder.id, task.id));
       const latest = (await db.select().from(supplierOrder).where(eq(supplierOrder.id, task.id)).limit(1))[0]!;
+      if (latest.state === "supplied") return { status: "supplied" as const };
       await fulfillSupplierOrder(database, latest, result.cards);
       return { status: "supplied" as const };
     }
     if (result.status === "processing") {
       await markAccountSuccess(db, account.id);
-      await db.update(supplierOrder).set({ upstreamOrderId: result.upstreamOrderId, state: "processing", nextRetryAt: new Date(Date.now() + RETRY_DELAY_MS), lastErrorCode: null, updatedAt: new Date() }).where(eq(supplierOrder.id, task.id));
+      const updated = await db.update(supplierOrder).set({ upstreamOrderId: result.upstreamOrderId, state: "processing", nextRetryAt: new Date(Date.now() + RETRY_DELAY_MS), lastErrorCode: null, lastErrorMessage: null, updatedAt: new Date() }).where(and(eq(supplierOrder.id, task.id), inArray(supplierOrder.state, ["submitting", "processing", "uncertain"]))).returning({ state: supplierOrder.state });
+      if (!updated.length) {
+        const [latest] = await db.select({ state: supplierOrder.state }).from(supplierOrder).where(eq(supplierOrder.id, task.id)).limit(1);
+        if (latest?.state === "supplied") return { status: "supplied" as const };
+      }
       return { status: "processing" as const };
     }
     if (result.status === "uncertain") {
